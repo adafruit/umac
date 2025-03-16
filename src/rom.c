@@ -79,7 +79,6 @@ static uint32_t rom_get_version(uint8_t *rom_base)
                 rom_base[(offset)+0] = (data) & 0xff;           \
         } while (0)
 
-
 static void     rom_patch_plusv3(uint8_t *rom_base)
 {
         /* Inspired by patches in BasiliskII!
@@ -121,11 +120,7 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
 #if DISP_WIDTH != 512 || DISP_HEIGHT != 342
 #define SCREEN_SIZE                     (DISP_WIDTH*DISP_HEIGHT/8)
 #define SCREEN_DISTANCE_FROM_TOP        (SCREEN_SIZE + 0x380)
-#if (SCREEN_DISTANCE_FROM_TOP >= 65536)
-#error "rom.c: Screen res patching maths won't work for a screen this large"
-#endif
 #define SCREEN_BASE                     (0x400000-SCREEN_DISTANCE_FROM_TOP)
-#define SCREEN_BASE_L16                 (SCREEN_BASE & 0xffff)
 #define SBCOORD(x, y)                   (SCREEN_BASE + ((DISP_WIDTH/8)*(y)) + ((x)/8))
 
         /* Changing video res:
@@ -148,10 +143,39 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
         /* Now 0x46-0x57 can be used */
         unsigned int patch_0 = 0x46;
         ROM_WR16(patch_0 + 0, 0x9bfc);          /* suba.l #imm32, A5 */
-        ROM_WR16(patch_0 + 2, 0);               /* (Could add more here) */
-        ROM_WR16(patch_0 + 4, SCREEN_DISTANCE_FROM_TOP);
+        ROM_WR32(patch_0 + 2, SCREEN_DISTANCE_FROM_TOP);
         ROM_WR16(patch_0 + 6, 0x6000);          /* bra */
         ROM_WR16(patch_0 + 8, 0x3a4 - (patch_0 + 8));   /* Return to 3a4 */
+
+        // Additional patches needed if DISP_WIDTH is 1024 or above
+#if (DISP_WIDTH / 8) >= 128
+        unsigned int patch_1 = patch_0 + 10;
+        ROM_WR16(patch_1 + 0, 0x3a3c);           /* move.l ..., D5 */
+        ROM_WR16(patch_1 + 2, DISP_WIDTH / 8);   /*        ^^^ */
+        ROM_WR16(patch_1 + 4, 0xc2c5);           /* mulu D5, D1 */
+        ROM_WR16(patch_1 + 6, 0x4e75);           /* rts */
+        if (patch_1 + 8 >= 0x57) {
+            RERR("patch_1 extends too far (0x%x > 0x57)", patch_1);
+        }
+
+        // is this the illegal instruction handler entry? if it is, it
+        // eventually falls through to 'check if test software exists',
+        // below.... @sc's annotated disassembly suggests "never called by the mac plus"
+        // but it looks to me like 0x2e is in the vector table at 0x16...
+        // patch it to jump down to after the test software check too.
+        ROM_WR16(0x2e, 0x6000);                 /* bra */
+        ROM_WR16(0x30, 0x62-0x30);              /* offset */
+        unsigned int patch_2 = 0x32;
+
+        ROM_WR16(patch_2 + 0, 0x303c);           /* move.l ..., D0 */
+        ROM_WR16(patch_2 + 2, DISP_WIDTH / 8);   /*        ^^^ */
+        ROM_WR16(patch_2 + 4, 0x2298);           /* Move.l (A0+), (A1) */
+        ROM_WR16(patch_2 + 6, 0x6000);           /* bra */
+        ROM_WR16(patch_2 + 8, 0x1cd4 - (patch_2 + 8));   /* Return to 1cd4 */
+        if (patch_2 + 8 >= 0x41) {
+            RERR("patch_2 extends too far (0x%x > 0x41)", patch_2);
+        }
+#endif
 
         /* Magic screen-related locations in Mac Plus ROM 4d1f8172:
          *
@@ -185,8 +209,8 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
          * 1e6e : x
          * 1e82 : y
          */
-        ROM_WR16(0x8c, SCREEN_BASE_L16);
-        ROM_WR16(0x148, SCREEN_BASE_L16);
+        ROM_WR32(0x8a, SCREEN_BASE);
+        ROM_WR32(0x146, SCREEN_BASE);
         ROM_WR32(0x164, SBCOORD(DISP_WIDTH/2 - (48/2), DISP_HEIGHT/2 + 8));
         ROM_WR16(0x188, DISP_WIDTH/8);
         ROM_WR16(0x194, DISP_WIDTH/8);
@@ -217,12 +241,25 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
         ROM_WR16(0xee2, (DISP_WIDTH/8)-4);      /* tPutIcon bytes per row, minus 4 */
         ROM_WR16(0xef2, DISP_WIDTH/8);          /* tPutIcon bytes per row */
         ROM_WR16(0xf36, (DISP_WIDTH/8)-2);      /* tPutIcon bytes per row, minus 2 */
-        ROM_WR8(0x1cd1, DISP_WIDTH/8);          /* hidecursor */
+
+#if (DISP_WIDTH / 8) >= 128
+        ROM_WR16(0x1cd0, 0x6000);               /* (hidecursor) bra */
+        ROM_WR16(0x1cd2, patch_2 - 0x1cd2);     /* .. to patch1, returns at 1cd4 */
+        ROM_WR16(0x1cd8, 0x6ef6);               /* loop back a bit further, argh */
+#else
+        ROM_WR8(0x1cd1, DISP_WIDTH/8);         /* hidecursor */
+#endif
+
         ROM_WR16(0x1d48, DISP_WIDTH-32);        /* 1d46+2 was originally 512-32 rite? */
         ROM_WR16(0x1d4e, DISP_WIDTH-32);        /* 1d4c+2 is 480, same */
         ROM_WR16(0x1d6e, DISP_HEIGHT-16);       /* showcursor (YESS fixed Y crash bug!) */
         ROM_WR16(0x1d74, DISP_HEIGHT);          /* showcursor */
-        ROM_WR8(0x1d93, DISP_WIDTH/8);          /* showcursor */
+#if (DISP_WIDTH / 8) >= 128
+        ROM_WR16(0x1d92, 0x4eba);               /* jsr */
+        ROM_WR16(0x1d94, patch_1 - 0x1d94);     /* .. to patch1, returns at 1d96 */
+#else
+        ROM_WR8(0x1d93, DISP_WIDTH/8);          /* hidecursor */
+#endif
         ROM_WR16(0x1e68, DISP_HEIGHT);          /* mScrnSize */
         ROM_WR16(0x1e6e, DISP_WIDTH);           /* mScrnSize */
         ROM_WR16(0x1e82, DISP_HEIGHT);          /* tScrnBitMap */

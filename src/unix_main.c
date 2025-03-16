@@ -54,7 +54,7 @@ static void     print_help(char *n)
                "\t-i\t\t\tDisassembled instruction trace\n", n);
 }
 
-#define DISP_SCALE      2
+#define DISP_SCALE      (DISP_WIDTH < 800 && DISP_HEIGHT < 600 ? 2 : 1)
 
 static uint32_t framebuffer[DISP_WIDTH*DISP_HEIGHT];
 
