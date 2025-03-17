@@ -169,10 +169,10 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
 
         ROM_WR16(patch_2 + 0, 0x303c);           /* move.l ..., D0 */
         ROM_WR16(patch_2 + 2, DISP_WIDTH / 8);   /*        ^^^ */
-        ROM_WR16(patch_2 + 4, 0x2298);           /* Move.l (A0+), (A1) */
-        ROM_WR16(patch_2 + 6, 0x6000);           /* bra */
-        ROM_WR16(patch_2 + 8, 0x1cd4 - (patch_2 + 8));   /* Return to 1cd4 */
-        if (patch_2 + 8 >= 0x41) {
+        ROM_WR16(patch_2 + 4, 0x41f8);           /* Lea.L     (CrsrSave), A0 */
+        ROM_WR16(patch_2 + 6, 0x088c);           /*            ^^^^^^^^ */
+        ROM_WR16(patch_2 + 8, 0x4e75);           /* rts */
+        if (patch_2 + 10 >= 0x41) {
             RERR("patch_2 extends too far (0x%x > 0x41)", patch_2);
         }
 #endif
@@ -243,9 +243,9 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
         ROM_WR16(0xf36, (DISP_WIDTH/8)-2);      /* tPutIcon bytes per row, minus 2 */
 
 #if (DISP_WIDTH / 8) >= 128
-        ROM_WR16(0x1cd0, 0x6000);               /* (hidecursor) bra */
-        ROM_WR16(0x1cd2, patch_2 - 0x1cd2);     /* .. to patch1, returns at 1cd4 */
-        ROM_WR16(0x1cd8, 0x6ef6);               /* loop back a bit further, argh */
+        ROM_WR16(0x1ccc, 0x4eba);               /* (hidecursor) jsr */
+        ROM_WR16(0x1cce, patch_2 - 0x1cce);     /* .. to patch2, returns at 1cd0 */
+        ROM_WR16(0x1cd0, 0x4e71);               /* nop */
 #else
         ROM_WR8(0x1cd1, DISP_WIDTH/8);         /* hidecursor */
 #endif
