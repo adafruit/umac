@@ -27,6 +27,7 @@
  * SOFTWARE.
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -35,6 +36,9 @@
 #include <sys/time.h>
 #include <string.h>
 #include <unistd.h>
+#if ENABLE_AUDIO
+#include <stdatomic.h>
+#endif
 #include "SDL.h"
 
 #include "rom.h"
@@ -78,18 +82,41 @@ static void     copy_fb(uint32_t *fb_out, uint8_t *fb_in)
         }
 }
 
-static void audio_callback(void *userdata, Uint8 *stream_in, int len_bytes) {
-        int16_t *stream = (int16_t*) stream_in;
-        int len = len_bytes / 2;
-        uint16_t *audiodata = userdata;
-        int32_t  scale = 65536 * umac_volume / 7;
-        int32_t  offset = 128;
-        while (len--) {
-                int32_t a = (*audiodata++ & 0xff) - offset;
-                a = (a * scale) >> 8;
-                *stream++ = a;
-        }
+#if ENABLE_AUDIO
+// audio_callback is called from a thread, so pending_v_retrace can't be a regular variable
+atomic_int pending_v_retrace;
+static int volscale;
+uint8_t *audio_base;
+
+int16_t audio[370];
+
+void umac_audio_cfg(int umac_volume, int umac_sndres) {
+        volscale = umac_sndres ? 0 : 65536 * umac_volume / 7;
 }
+
+void umac_audio_trap() {
+    int32_t  offset = 128;
+    uint16_t *audiodata = (uint16_t*)audio_base;
+    int scale = volscale;
+    if (!scale) {
+        memset(audio, 0, sizeof(audio));
+        return;
+    }
+    int16_t *stream = audio;
+    for(int i=0; i<370; i++) {
+        int32_t a = (*audiodata++ & 0xff) - offset;
+        a = (a * scale) >> 8;
+        *stream++ = a;
+    }
+}
+
+static void audio_callback(void *userdata, Uint8 *stream_in, int len_bytes) {
+        (void) userdata;
+        assert(len_bytes == sizeof(audio));
+        atomic_store(&pending_v_retrace, 1);
+        memcpy(stream_in, audio, sizeof(audio));
+}
+#endif
 
 /**********************************************************************/
 
@@ -245,7 +272,11 @@ int     main(int argc, char *argv[])
         SDL_Renderer *renderer;
         SDL_Texture *texture;
 
-        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+        SDL_Init(SDL_INIT_VIDEO
+#if ENABLE_AUDIO
+                | SDL_INIT_AUDIO
+#endif
+);
         SDL_Window *window = SDL_CreateWindow("umac",
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
@@ -277,7 +308,10 @@ int     main(int argc, char *argv[])
                 return 1;
         }
 
+#if ENABLE_AUDIO
         SDL_AudioSpec desired, obtained;
+
+        audio_base = (uint8_t*)ram_base + umac_get_audio_offset();
 
         SDL_zero(desired);
         desired.freq = 22256; // wat
@@ -294,6 +328,7 @@ int     main(int argc, char *argv[])
                 printf("SDL audio_deviceSDL_GetError() -> %s\n", buf);
                 return 1;
         }
+#endif
 
         ////////////////////////////////////////////////////////////////////////
         // Emulator init
@@ -301,15 +336,19 @@ int     main(int argc, char *argv[])
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
 
+#if ENABLE_AUDIO
         // Default state is paused, this unpauses it
         SDL_PauseAudioDevice(audio_device, 0);
+#endif
 
         ////////////////////////////////////////////////////////////////////////
         // Main loop
 
         int done = 0;
         int mouse_button = 0;
+#if !ENABLE_AUDIO
         uint64_t last_vsync = 0;
+#endif
         uint64_t last_1hz = 0;
         do {
                 struct timeval tv_now;
@@ -355,11 +394,14 @@ int     main(int argc, char *argv[])
                 uint64_t now_usec = (tv_now.tv_sec * 1000000) + tv_now.tv_usec;
 
                 /* Passage of time: */
-                if ((now_usec - last_vsync) >= 16667) {
+#if ENABLE_AUDIO
+                int do_v_retrace = atomic_exchange(&pending_v_retrace, 0);
+#else
+                int do_v_retrace = (now_usec - last_vsync) >= 16667;
+#endif
+                if (do_v_retrace) {
                         umac_vsync_event();
-                        last_vsync = now_usec;
 
-                        /* Cheapo framerate limiting: */
                         copy_fb(framebuffer, ram_get_base() + umac_get_fb_offset());
                         SDL_UpdateTexture(texture, NULL, framebuffer,
                                           DISP_WIDTH * sizeof (Uint32));

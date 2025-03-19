@@ -27,6 +27,7 @@
 
 DEBUG ?= 0
 MEMSIZE ?= 128
+ENABLE_AUDIO ?= 1
 
 SOURCES = $(wildcard src/*.c)
 
@@ -54,7 +55,7 @@ endif
 # Basic support for changing screen res (with the MacPlusV3 ROM)
 DISP_WIDTH ?= 512
 DISP_HEIGHT ?= 342
-CFLAGS_CFG = -DDISP_WIDTH=$(DISP_WIDTH) -DDISP_HEIGHT=$(DISP_HEIGHT)
+CFLAGS_CFG = -DDISP_WIDTH=$(DISP_WIDTH) -DDISP_HEIGHT=$(DISP_HEIGHT) -DENABLE_AUDIO=$(ENABLE_AUDIO)
 
 all:	main
 

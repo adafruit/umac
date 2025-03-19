@@ -71,7 +71,9 @@ static unsigned int g_int_controller_highest_int = 0;  /* Highest pending interr
 uint8_t *_ram_base;
 uint8_t *_rom_base;
 
-int umac_volume = 0;
+#if ENABLE_AUDIO
+static int umac_volume, umac_sndres;
+#endif
 int overlay = 1;
 static uint64_t global_time_us = 0;
 static int sim_done = 0;
@@ -156,9 +158,14 @@ static void     via_ra_changed(uint8_t val)
                 MDBG("OVERLAY CHANGING\n");
                 update_overlay_layout();
         }
-        umac_volume = val & 7;
-
+#if ENABLE_AUDIO
+        uint8_t vol = val & 7;
+        if (vol != umac_volume) {
+            umac_volume = val & 7;
+            umac_audio_cfg(umac_volume, umac_sndres);
+        }
         oldval = val;
+#endif
 }
 
 static void     via_rb_changed(uint8_t val)
@@ -169,7 +176,13 @@ static void     via_rb_changed(uint8_t val)
         // 4 = mouse4 (in, mouse X2)
         // 3 = mouse7 (in, 0 = button pressed)
         // [2:0] = RTC controls
-        (void)val;
+#if ENABLE_AUDIO
+        uint8_t sndres = val >> 7;
+        if(sndres != umac_sndres) {
+            umac_sndres = sndres;
+            umac_audio_cfg(umac_volume, umac_sndres);
+        }
+#endif
 }
 
 static uint8_t  via_ra_in(void)
@@ -440,7 +453,13 @@ unsigned int    cpu_read_long_dasm(unsigned int address)
 void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
-                RAM_WR8(CLAMP_RAM_ADDR(address), value);
+                address = CLAMP_RAM_ADDR(address);
+                RAM_WR8(address, value);
+#if ENABLE_AUDIO
+                if(IS_RAM_AUDIO_TRAP(address)) {
+                    umac_audio_trap();
+                }
+#endif
                 return;
         }
 
