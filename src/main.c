@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <setjmp.h>
 
+#include "umac.h"
 #include "machw.h"
 #include "m68k.h"
 #include "via.h"
@@ -70,6 +71,7 @@ static unsigned int g_int_controller_highest_int = 0;  /* Highest pending interr
 uint8_t *_ram_base;
 uint8_t *_rom_base;
 
+int umac_volume = 0;
 int overlay = 1;
 static uint64_t global_time_us = 0;
 static int sim_done = 0;
@@ -154,6 +156,7 @@ static void     via_ra_changed(uint8_t val)
                 MDBG("OVERLAY CHANGING\n");
                 update_overlay_layout();
         }
+        umac_volume = val & 7;
 
         oldval = val;
 }

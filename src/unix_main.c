@@ -78,6 +78,19 @@ static void     copy_fb(uint32_t *fb_out, uint8_t *fb_in)
         }
 }
 
+static void audio_callback(void *userdata, Uint8 *stream_in, int len_bytes) {
+        int16_t *stream = (int16_t*) stream_in;
+        int len = len_bytes / 2;
+        uint16_t *audiodata = userdata;
+        int32_t  scale = 65536 * umac_volume / 7;
+        int32_t  offset = 128;
+        while (len--) {
+                int32_t a = (*audiodata++ & 0xff) - offset;
+                a = (a * scale) >> 8;
+                *stream++ = a;
+        }
+}
+
 /**********************************************************************/
 
 /* The emulator core expects to be given ROM and RAM pointers,
@@ -232,7 +245,7 @@ int     main(int argc, char *argv[])
         SDL_Renderer *renderer;
         SDL_Texture *texture;
 
-        SDL_Init(SDL_INIT_VIDEO);
+        SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
         SDL_Window *window = SDL_CreateWindow("umac",
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
@@ -264,11 +277,32 @@ int     main(int argc, char *argv[])
                 return 1;
         }
 
+        SDL_AudioSpec desired, obtained;
+
+        SDL_zero(desired);
+        desired.freq = 22256; // wat
+        desired.channels = 1;
+        desired.samples = 370;
+        desired.userdata = (uint8_t*)ram_base + umac_get_audio_offset();
+        desired.callback = audio_callback;
+        desired.format = AUDIO_S16;
+
+        SDL_AudioDeviceID audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained, 0);
+        if (!audio_device) {
+                char buf[500];
+                SDL_GetErrorMsg(buf, sizeof(buf));
+                printf("SDL audio_deviceSDL_GetError() -> %s\n", buf);
+                return 1;
+        }
+
         ////////////////////////////////////////////////////////////////////////
         // Emulator init
 
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
+
+        // Default state is paused, this unpauses it
+        SDL_PauseAudioDevice(audio_device, 0);
 
         ////////////////////////////////////////////////////////////////////////
         // Main loop
