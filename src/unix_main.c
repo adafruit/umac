@@ -403,6 +403,18 @@ int     main(int argc, char *argv[])
                         umac_vsync_event();
 
                         copy_fb(framebuffer, ram_get_base() + umac_get_fb_offset());
+
+        uint16_t *audioptr = (uint16_t*)((uint8_t*)ram_base + umac_get_audio_offset());
+        for(int i=0; i<DISP_HEIGHT; i++) {
+            int d = *audioptr++ & 0xff;
+            for(int j=0; j<8; j++) {
+                if (d & (1 << j)) {
+                    uint32_t fbdata = framebuffer[j + i * DISP_WIDTH];
+                    fbdata = (fbdata & ~0xff) | ((d & (1 << j)) ? 0xff : 0);
+                    framebuffer[j + i * DISP_WIDTH] = fbdata;
+                }
+            }
+        }
                         SDL_UpdateTexture(texture, NULL, framebuffer,
                                           DISP_WIDTH * sizeof (Uint32));
                         /* Scales texture up to window size */
