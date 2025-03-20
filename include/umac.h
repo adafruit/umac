@@ -56,6 +56,9 @@ static inline unsigned int      umac_get_fb_offset(void)
 #if ENABLE_AUDIO
 #define umac_get_audio_offset() (RAM_SIZE - 768)
 #define umac_get_audio_offset_end() (RAM_SIZE - 768 + 2 * 370)
+extern unsigned first_audio_sample;
+#define umac_get_first_audio_sample() (first_audio_sample)
+#define umac_reset_first_audio_sample() (first_audio_sample = 0, (void)0)
 
 void umac_audio_trap();
 void umac_audio_cfg(int volume, int sndres);

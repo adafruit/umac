@@ -116,6 +116,9 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
          * allowing the ROM checksum to fail (it returns failure, then
          * we carry on).  This avoids wild RAM addrs being accessed.
          */
+
+        /* Fix up the sound buffer as used by BootBeep */
+        ROM_WR32(0x292, RAM_SIZE - 768);
 #endif
 
 #if DISP_WIDTH != 512 || DISP_HEIGHT != 342
