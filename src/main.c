@@ -614,94 +614,32 @@ void    umac_opt_disassemble(int enable)
         disassemble = enable;
 }
 
-#define MOUSE_MAX_PENDING_PIX   30
-
-static int pending_mouse_deltax = 0;
-static int pending_mouse_deltay = 0;
-
 /* Provide mouse input (movement, button) data.
  *
  * X is positive going right; Y is positive going upwards.
  */
 void    umac_mouse(int deltax, int deltay, int button)
 {
-        pending_mouse_deltax += deltax;
-        pending_mouse_deltay += deltay;
+#define MTemp_h 0x82a
+#define MTemp_v 0x828
+#define CrsrNew 0x8ce
+#define CrsrCouple 0x8cf
 
-        /* Clamp if the UI has flooded with lots and lots of steps!
-         */
-        if (pending_mouse_deltax > MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltax = MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltax < -MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltax = -MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltay > MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltay = MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltay < -MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltay = -MOUSE_MAX_PENDING_PIX;
-
-        /* FIXME: The movement might take a little time, but this
-         * posts the button status immediately.  Probably OK, but the
-         * mismatch might be perceptible.
-         */
-        via_mouse_pressed = button;
-}
-
-static void     mouse_tick(void)
-{
-        /* Periodically, check if the mouse X/Y deltas are non-zero.
-         * If a movement is required, encode one step in X and/or Y
-         * and deduct from the pending delta.
-         *
-         * The step ultimately posts an SCC IRQ, so we _don't_ try to
-         * make any more steps while an IRQ is currently pending.
-         * (Currently, that means a previous step's DCD IRQ event
-         * hasn't yet been consumed by the OS handler.  In future, if
-         * SCC is extended with other IRQ types, then just checking
-         * the IRQ status is technically too crude, but should still
-         * be fine given the timeframes.)
-         */
-        if (pending_mouse_deltax == 0 && pending_mouse_deltay == 0)
-                return;
-
-        if (scc_irq_state == 1)
-                return;
-
-        static int old_dcd_a = 0;
-        static int old_dcd_b = 0;
-
-        /* Mouse X/Y quadrature signals are wired to:
-         *  VIA Port B[4] & SCC DCD_A for X
-         *  VIA Port B[5] & SCC DCD_B for Y
-         *
-         * As VIA mouse signals aren't sampled until IRQ, can do this
-         * in one step, toggling existing DCD states and setting VIA
-         * either equal or opposite to DCD:
-         */
-        int dcd_a = old_dcd_a;
-        int dcd_b = old_dcd_b;
-        int deltax = pending_mouse_deltax;
-        int deltay = pending_mouse_deltay;
-        uint8_t qb = via_quadbits;
-
-        if (deltax) {
-                dcd_a = !dcd_a;
-                qb = (qb & ~0x10) | ((deltax < 0) == dcd_a ? 0x10 : 0);
-                pending_mouse_deltax += (deltax > 0) ? -1 : 1;
-                MDBG("  px %d, oldpx %d", pending_mouse_deltax, deltax);
+        if(deltax) {
+            int16_t temp_h = RAM_RD16(MTemp_h) + deltax;
+            RAM_WR16(MTemp_h, temp_h);
         }
 
         if (deltay) {
-                dcd_b = !dcd_b;
-                qb = (qb & ~0x20) | ((deltay < 0) == dcd_b ? 0x20 : 0);
-                pending_mouse_deltay += (deltay > 0) ? -1 : 1;
-                MDBG("  py %d, oldpy %d", pending_mouse_deltay, deltay);
+            int16_t temp_v = RAM_RD16(MTemp_v) - deltay;
+            RAM_WR16(MTemp_v, temp_v);
         }
-        MDBG("\n");
 
-        via_quadbits = qb;
-        old_dcd_a = dcd_a;
-        old_dcd_b = dcd_b;
-        scc_set_dcd(dcd_a, dcd_b);
+        if(deltax || deltay) {
+            RAM_WR8(CrsrNew, RAM_RD8(CrsrCouple));
+        }
+
+        via_mouse_pressed = button;
 }
 
 void    umac_reset(void)
@@ -733,7 +671,6 @@ int     umac_loop(void)
 
         // Device polling
         via_tick(global_time_us);
-        mouse_tick();
         kbd_check_work();
 
 	return sim_done;
