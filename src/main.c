@@ -668,8 +668,7 @@ int     umac_loop(void)
         int cycles = UMAC_EXECLOOP_QUANTUM * 8;
         cycles = via_limit_cycles(cycles);
         int used_cycles = m68k_execute(cycles);
-printf("Asked to execute %d cycles, actual %d cycles\n",
-cycles, used_cycles);
+        MDBG("Asked to execute %d cycles, actual %d cycles\n", cycles, used_cycles);
         global_cycles += used_cycles;
         global_time_us = global_cycles / 8;
 
