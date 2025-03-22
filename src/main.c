@@ -75,7 +75,7 @@ uint8_t *_rom_base;
 static int umac_volume, umac_sndres;
 #endif
 int overlay = 1;
-static uint64_t global_time_us = 0;
+static uint64_t global_time_us = 0, global_cycles = 0;
 static int sim_done = 0;
 static jmp_buf main_loop_jb;
 
@@ -665,12 +665,16 @@ int     umac_loop(void)
 {
         setjmp(main_loop_jb);
 
-        const int us = UMAC_EXECLOOP_QUANTUM;
-        m68k_execute(us*8);
-        global_time_us += us;
+        int cycles = UMAC_EXECLOOP_QUANTUM * 8;
+        cycles = via_limit_cycles(cycles);
+        int used_cycles = m68k_execute(cycles);
+printf("Asked to execute %d cycles, actual %d cycles\n",
+cycles, used_cycles);
+        global_cycles += used_cycles;
+        global_time_us = global_cycles / 8;
 
         // Device polling
-        via_tick(global_time_us);
+        via_tick(used_cycles);
         kbd_check_work();
 
 	return sim_done;

@@ -29,6 +29,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#include "m68kcpu.h"
 #include "via.h"
 
 #ifdef DEBUG
@@ -47,7 +48,8 @@
 #define VIA_T1CH        5
 #define VIA_T1LL        6
 #define VIA_T1LH        7
-#define VIA_T2CL        8
+#define VIA_T2CL        8 // write latch
+#define VIA_T2LL        8 // read counter
 #define VIA_T2CH        9
 #define VIA_SR          10
 #define VIA_ACR         11
@@ -56,6 +58,7 @@
 #define  VIA_IRQ_CA     0x01
 #define  VIA_IRQ_CB     0x02
 #define  VIA_IRQ_SR     0x04
+#define  VIA_IRQ_T2     0x20
 #define VIA_IER         14
 #define VIA_RA_ALT      15 // No-handshake version
 
@@ -68,7 +71,7 @@ static const char *dbg_regnames[] = {
         "VIA_T1CH",
         "VIA_T1LL",
         "VIA_T1LH",
-        "VIA_T2CL",
+        "VIA_T2xL",
         "VIA_T2CH",
         "VIA_SR",
         "VIA_ACR",
@@ -83,6 +86,8 @@ static struct via_cb via_callbacks;
 static int irq_status = 0;
 static uint8_t irq_active = 0;
 static uint8_t irq_enable = 0;
+
+static uint16_t via_t2c;
 
 void    via_init(struct via_cb *cb)
 {
@@ -224,6 +229,25 @@ void    via_write(unsigned int address, uint8_t data)
         case VIA_PCR:
                 VDBG("VIA PCR %02x\n", data);
                 break;
+        case VIA_ACR:
+                if(data & 0xe0)
+                    VDBG("VIA ACR %02x\n", data);
+                break;
+        case VIA_T2CH:
+                VDBG("VIA T2CH %02x [ACR=%02x]\n", data, via_regs[VIA_ACR]);
+                // writing T2CH loads the low 8 bits from the latch
+                via_t2c = via_regs[VIA_T2CL] | (data << 8);
+                VDBG("VIA Loaded timer 2 with %d cycles\n", via_t2c);
+                if(via_t2c > 0 && GET_CYCLES() > via_t2c) {
+                    SET_CYCLES(via_t2c);
+                }
+                // writing T2CH clears associated IRQ flag
+                irq_active &= ~VIA_IRQ_T2;
+                via_assess_irq();
+                break;
+        case VIA_T2CL:
+                VDBG("VIA T2CL %02x [ACR=%02x]\n", data, via_regs[VIA_ACR]);
+                break;
         default:
                 VDBG("[VIA: unhandled WR %02x to %s (reg 0x%x)]\n", data, rname, r);
         }
@@ -282,6 +306,15 @@ uint8_t via_read(unsigned int address)
         case VIA_IFR:
                 data = via_read_ifr();
                 break;
+
+        case VIA_T2LL:
+                // not right, should be reduced according to cycles since
+                // quantum began
+                data = via_t2c & 0xff;
+                // reading T2LL clears associated IRQ flag
+                irq_active &= ~VIA_IRQ_T2;
+                via_assess_irq();
+                break;
         default:
                 VDBG("[VIA: unhandled RD of %s (reg 0x%x)]\n", rname, r);
         }
@@ -290,10 +323,29 @@ uint8_t via_read(unsigned int address)
         return data;
 }
 
+int via_limit_cycles(int cycles_in) {
+    if (via_t2c > 0 && via_t2c < cycles_in) {
+        return via_t2c;
+    }
+    return cycles_in;
+}
+
 /* Time param in us */
-void    via_tick(uint64_t time)
+void    via_tick(int cycles)
 {
-        (void)time;
+        int i = via_t2c;
+        if (i) {
+            int old = i;
+            i -= cycles;
+            VDBG("Timer count down %d -> %d\n", old, i);
+            if (i <= 0) {
+                i = 0;
+                VDBG("[VIA T2 reached zero, IRQ pending]\n");
+                irq_active |= VIA_IRQ_T2;
+                via_assess_irq();
+            }
+            via_t2c = i;
+        }
         // FIXME: support actual timers.....!
 }
 
