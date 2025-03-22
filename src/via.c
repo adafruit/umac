@@ -243,7 +243,6 @@ void    via_write(unsigned int address, uint8_t data)
                 }
                 // writing T2CH clears associated IRQ flag
                 irq_active &= ~VIA_IRQ_T2;
-                via_assess_irq();
                 break;
         case VIA_T2CL:
                 VDBG("VIA T2CL %02x [ACR=%02x]\n", data, via_regs[VIA_ACR]);
@@ -313,7 +312,6 @@ uint8_t via_read(unsigned int address)
                 data = via_t2c & 0xff;
                 // reading T2LL clears associated IRQ flag
                 irq_active &= ~VIA_IRQ_T2;
-                via_assess_irq();
                 break;
         default:
                 VDBG("[VIA: unhandled RD of %s (reg 0x%x)]\n", rname, r);
