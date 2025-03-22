@@ -339,7 +339,7 @@ void    via_tick(int cycles)
             if (i <= 0) {
                 i = 0;
                 VDBG("[VIA T2 reached zero, IRQ pending]\n");
-                irq_active |= VIA_IRQ_T2;
+                // irq_active |= VIA_IRQ_T2;
                 via_assess_irq();
             }
             via_t2c = i;
