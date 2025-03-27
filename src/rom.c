@@ -80,7 +80,7 @@ static uint32_t rom_get_version(uint8_t *rom_base)
         } while (0)
 
 
-static void     rom_patch_plusv3(uint8_t *rom_base)
+static int     rom_patch_plusv3(uint8_t *rom_base, int disp_width, int disp_height, int ram_size)
 {
         /* Inspired by patches in BasiliskII!
          */
@@ -100,141 +100,143 @@ static void     rom_patch_plusv3(uint8_t *rom_base)
          * - No IWM init
          * - new Sound?
          */
-#if UMAC_MEMSIZE > 128 && UMAC_MEMSIZE < 512
-        /* Hack to change memtop: try out a 256K Mac :) */
-        for (int i = 0x376; i < 0x37e; i += 2)
-                ROM_WR16(i, M68K_INST_NOP);
-        ROM_WR16(0x376, 0x2a7c); // moveal #RAM_SIZE, A5
-        ROM_WR16(0x378, RAM_SIZE >> 16);
-        ROM_WR16(0x37a, RAM_SIZE & 0xffff);
-        /* That overrides the probed memory size, but
-         * P_ChecksumRomAndTestMemory returns a failure code for
-         * things that aren't 128/512.  Skip that:
-         */
-        ROM_WR16(0x132, 0x6000); // Bra (was BEQ)
-        /* FIXME: We should also remove the memory probe routine, by
-         * allowing the ROM checksum to fail (it returns failure, then
-         * we carry on).  This avoids wild RAM addrs being accessed.
-         */
+        if (ram_size > 128*1024 && ram_size < 512*1024) {
+                /* Hack to change memtop: try out a 256K Mac :) */
+                for (int i = 0x376; i < 0x37e; i += 2)
+                        ROM_WR16(i, M68K_INST_NOP);
+                ROM_WR16(0x376, 0x2a7c); // moveal #ram_size, A5
+                ROM_WR16(0x378, ram_size >> 16);
+                ROM_WR16(0x37a, ram_size & 0xffff);
+                /* That overrides the probed memory size, but
+                 * P_ChecksumRomAndTestMemory returns a failure code for
+                 * things that aren't 128/512.  Skip that:
+                 */
+                ROM_WR16(0x132, 0x6000); // Bra (was BEQ)
+                /* FIXME: We should also remove the memory probe routine, by
+                 * allowing the ROM checksum to fail (it returns failure, then
+                 * we carry on).  This avoids wild RAM addrs being accessed.
+                 */
 
-        /* Fix up the sound buffer as used by BootBeep */
-        ROM_WR32(0x292, RAM_SIZE - 768);
-#endif
+                /* Fix up the sound buffer as used by BootBeep */
+                ROM_WR32(0x292, ram_size - 768);
+        }
 
-#if DISP_WIDTH != 512 || DISP_HEIGHT != 342
-#define SCREEN_SIZE                     (DISP_WIDTH*DISP_HEIGHT/8)
-#define SCREEN_DISTANCE_FROM_TOP        (SCREEN_SIZE + 0x380)
-#if (SCREEN_DISTANCE_FROM_TOP >= 65536)
-#error "rom.c: Screen res patching maths won't work for a screen this large"
-#endif
-#define SCREEN_BASE                     (0x400000-SCREEN_DISTANCE_FROM_TOP)
-#define SCREEN_BASE_L16                 (SCREEN_BASE & 0xffff)
-#define SBCOORD(x, y)                   (SCREEN_BASE + ((DISP_WIDTH/8)*(y)) + ((x)/8))
+        if(disp_width != 512 || disp_height != 342) {
+                int screen_size = (disp_width*disp_height/8);
+                int screen_distance_from_top = screen_size + 0x380;
+                if (screen_distance_from_top >= 65536) {
+                    RERR("rom.c: screen res patching maths won't work for a screen this large");
+                    return -1;
+                }
+                int screen_base = 0x400000-screen_distance_from_top;
+                int screen_base_l16 = screen_base & 0xffff;
+#define SBCOORD(x, y)                   (screen_base + ((disp_width/8)*(y)) + ((x)/8))
 
-        /* Changing video res:
-         *
-         * Original 512*342 framebuffer is 0x5580 bytes; the screen
-         * buffer lands underneath sound/other buffers at top of mem,
-         * i,e, 0x3fa700 = 0x400000-0x5580-0x380.  So any new buffer
-         * will be placed (and read out from for the GUI) at
-         * MEM_TOP-0x380-SCREEN_SIZE.
-         *
-         * For VGA, size is 0x9600 bytes (0x2580 words)
-         */
+                /* Changing video res:
+                 *
+                 * Original 512*342 framebuffer is 0x5580 bytes; the screen
+                 * buffer lands underneath sound/other buffers at top of mem,
+                 * i,e, 0x3fa700 = 0x400000-0x5580-0x380.  So any new buffer
+                 * will be placed (and read out from for the GUI) at
+                 * MEM_TOP-0x380-screen_size.
+                 *
+                 * For VGA, size is 0x9600 bytes (0x2580 words)
+                 */
 
-        /* We need some space, low down, to create jump-out-and-patch
-         * routines where a patch is too large to put inline.  The
-         * TestSoftware check at 0x42 isn't used:
-         */
-        ROM_WR16(0x42, 0x6000);                 /* bra */
-        ROM_WR16(0x44, 0x62-0x44);              /* offset */
-        /* Now 0x46-0x57 can be used */
-        unsigned int patch_0 = 0x46;
-        ROM_WR16(patch_0 + 0, 0x9bfc);          /* suba.l #imm32, A5 */
-        ROM_WR16(patch_0 + 2, 0);               /* (Could add more here) */
-        ROM_WR16(patch_0 + 4, SCREEN_DISTANCE_FROM_TOP);
-        ROM_WR16(patch_0 + 6, 0x6000);          /* bra */
-        ROM_WR16(patch_0 + 8, 0x3a4 - (patch_0 + 8));   /* Return to 3a4 */
+                /* We need some space, low down, to create jump-out-and-patch
+                 * routines where a patch is too large to put inline.  The
+                 * TestSoftware check at 0x42 isn't used:
+                 */
+                ROM_WR16(0x42, 0x6000);                 /* bra */
+                ROM_WR16(0x44, 0x62-0x44);              /* offset */
+                /* Now 0x46-0x57 can be used */
+                unsigned int patch_0 = 0x46;
+                ROM_WR16(patch_0 + 0, 0x9bfc);          /* suba.l #imm32, A5 */
+                ROM_WR16(patch_0 + 2, 0);               /* (Could add more here) */
+                ROM_WR16(patch_0 + 4, screen_distance_from_top);
+                ROM_WR16(patch_0 + 6, 0x6000);          /* bra */
+                ROM_WR16(patch_0 + 8, 0x3a4 - (patch_0 + 8));   /* Return to 3a4 */
 
-        /* Magic screen-related locations in Mac Plus ROM 4d1f8172:
-         *
-         * 8c : screen base addr (usually 3fa700, now 3f6680)
-         * 148 : screen base addr again
-         * 164 : u32 screen address of crash Mac/critErr hex numbers
-         * 188 : u16 bytes per row (critErr)
-         * 194 : u16 bytes per row (critErr)
-         * 19c : u16 (bytes per row * 6)-1 (critErr)
-         * 1a4 : u32 screen address of critErr twiddly pattern
-         * 1ee : u16 screen sie in words minus one
-         * 3a2 : u16 screen size in bytes (BUT can't patch immediate)
-         * 474 : u16 bytes per row
-         * 494 : u16 screen y
-         * 498 : u16 screen x
-         * a0e : y
-         * a10 : x
-         * ee2 : u16 bytes per row minus 4 (tPutIcon)
-         * ef2 : u16 bytes per row (tPutIcon)
-         * 7e0 : u32 screen address of disk icon (240, 145)
-         * 7f2 : u32 screen address of disk icon's symbol (248, 160)
-         * f0c : u32 screen address of Mac icon (240, 145)
-         * f18 : u32 screen address of Mac icon's face (248, 151)
-         * f36 : u16 bytes per row minus 2 (mPutSymbol)
-         * 1cd1 : hidecursor's bytes per line
-         * 1d48 : xres minus 32 (for cursor rect clipping)
-         * 1d4e : xres minus 32
-         * 1d74 : y
-         * 1d93 : bytes per line (showcursor)
-         * 1e68 : y
-         * 1e6e : x
-         * 1e82 : y
-         */
-        ROM_WR16(0x8c, SCREEN_BASE_L16);
-        ROM_WR16(0x148, SCREEN_BASE_L16);
-        ROM_WR32(0x164, SBCOORD(DISP_WIDTH/2 - (48/2), DISP_HEIGHT/2 + 8));
-        ROM_WR16(0x188, DISP_WIDTH/8);
-        ROM_WR16(0x194, DISP_WIDTH/8);
-        ROM_WR16(0x19c, (6*DISP_WIDTH/8)-1);
-        ROM_WR32(0x1a4, SBCOORD(DISP_WIDTH/2 - 8, DISP_HEIGHT/2 + 8 + 8));
-        ROM_WR16(0x1ee, (SCREEN_SIZE/4)-1);
+                /* Magic screen-related locations in Mac Plus ROM 4d1f8172:
+                 *
+                 * 8c : screen base addr (usually 3fa700, now 3f6680)
+                 * 148 : screen base addr again
+                 * 164 : u32 screen address of crash Mac/critErr hex numbers
+                 * 188 : u16 bytes per row (critErr)
+                 * 194 : u16 bytes per row (critErr)
+                 * 19c : u16 (bytes per row * 6)-1 (critErr)
+                 * 1a4 : u32 screen address of critErr twiddly pattern
+                 * 1ee : u16 screen sie in words minus one
+                 * 3a2 : u16 screen size in bytes (BUT can't patch immediate)
+                 * 474 : u16 bytes per row
+                 * 494 : u16 screen y
+                 * 498 : u16 screen x
+                 * a0e : y
+                 * a10 : x
+                 * ee2 : u16 bytes per row minus 4 (tPutIcon)
+                 * ef2 : u16 bytes per row (tPutIcon)
+                 * 7e0 : u32 screen address of disk icon (240, 145)
+                 * 7f2 : u32 screen address of disk icon's symbol (248, 160)
+                 * f0c : u32 screen address of Mac icon (240, 145)
+                 * f18 : u32 screen address of Mac icon's face (248, 151)
+                 * f36 : u16 bytes per row minus 2 (mPutSymbol)
+                 * 1cd1 : hidecursor's bytes per line
+                 * 1d48 : xres minus 32 (for cursor rect clipping)
+                 * 1d4e : xres minus 32
+                 * 1d74 : y
+                 * 1d93 : bytes per line (showcursor)
+                 * 1e68 : y
+                 * 1e6e : x
+                 * 1e82 : y
+                 */
+                ROM_WR16(0x8c, screen_base_l16);
+                ROM_WR16(0x148, screen_base_l16);
+                ROM_WR32(0x164, SBCOORD(disp_width/2 - (48/2), disp_height/2 + 8));
+                ROM_WR16(0x188, disp_width/8);
+                ROM_WR16(0x194, disp_width/8);
+                ROM_WR16(0x19c, (6*disp_width/8)-1);
+                ROM_WR32(0x1a4, SBCOORD(disp_width/2 - 8, disp_height/2 + 8 + 8));
+                ROM_WR16(0x1ee, (screen_size/4)-1);
 
-        ROM_WR32(0xf0c, SBCOORD(DISP_WIDTH/2 - 16, DISP_HEIGHT/2 - 26));
-        ROM_WR32(0xf18, SBCOORD(DISP_WIDTH/2 - 8, DISP_HEIGHT/2 - 20));
-        ROM_WR32(0x7e0, SBCOORD(DISP_WIDTH/2 - 16, DISP_HEIGHT/2 - 26));
-        ROM_WR32(0x7f2, SBCOORD(DISP_WIDTH/2 - 8, DISP_HEIGHT/2 - 11));
+                ROM_WR32(0xf0c, SBCOORD(disp_width/2 - 16, disp_height/2 - 26));
+                ROM_WR32(0xf18, SBCOORD(disp_width/2 - 8, disp_height/2 - 20));
+                ROM_WR32(0x7e0, SBCOORD(disp_width/2 - 16, disp_height/2 - 26));
+                ROM_WR32(0x7f2, SBCOORD(disp_width/2 - 8, disp_height/2 - 11));
 
-        /* Patch "SubA #$5900, A5" to subtract 0x9880.
-         * However... can't just patch the int16 immediate, as that's
-         * sign-extended (and we end up with a subtract-negative,
-         * i.e. an add).  There isn't space here to turn it into sub.l
-         * so add some rigamarole to branch to some bytes stolen at
-         * patch_0 up above.
-         */
-        ROM_WR16(0x3a0, 0x6000);                /* bra */
-        ROM_WR16(0x3a2, patch_0 - 0x3a2);       /* ...to patch0, returns at 0x3a4 */
+                /* Patch "SubA #$5900, A5" to subtract 0x9880.
+                 * However... can't just patch the int16 immediate, as that's
+                 * sign-extended (and we end up with a subtract-negative,
+                 * i.e. an add).  There isn't space here to turn it into sub.l
+                 * so add some rigamarole to branch to some bytes stolen at
+                 * patch_0 up above.
+                 */
+                ROM_WR16(0x3a0, 0x6000);                /* bra */
+                ROM_WR16(0x3a2, patch_0 - 0x3a2);       /* ...to patch0, returns at 0x3a4 */
 
-        ROM_WR16(0x474, DISP_WIDTH/8);
-        ROM_WR16(0x494, DISP_HEIGHT);
-        ROM_WR16(0x498, DISP_WIDTH);
-        ROM_WR16(0xa0e, DISP_HEIGHT);           /* copybits? */
-        ROM_WR16(0xa10, DISP_WIDTH);
-        ROM_WR16(0xee2, (DISP_WIDTH/8)-4);      /* tPutIcon bytes per row, minus 4 */
-        ROM_WR16(0xef2, DISP_WIDTH/8);          /* tPutIcon bytes per row */
-        ROM_WR16(0xf36, (DISP_WIDTH/8)-2);      /* tPutIcon bytes per row, minus 2 */
-        ROM_WR8(0x1cd1, DISP_WIDTH/8);          /* hidecursor */
-        ROM_WR16(0x1d48, DISP_WIDTH-32);        /* 1d46+2 was originally 512-32 rite? */
-        ROM_WR16(0x1d4e, DISP_WIDTH-32);        /* 1d4c+2 is 480, same */
-        ROM_WR16(0x1d6e, DISP_HEIGHT-16);       /* showcursor (YESS fixed Y crash bug!) */
-        ROM_WR16(0x1d74, DISP_HEIGHT);          /* showcursor */
-        ROM_WR8(0x1d93, DISP_WIDTH/8);          /* showcursor */
-        ROM_WR16(0x1e68, DISP_HEIGHT);          /* mScrnSize */
-        ROM_WR16(0x1e6e, DISP_WIDTH);           /* mScrnSize */
-        ROM_WR16(0x1e82, DISP_HEIGHT);          /* tScrnBitMap */
+                ROM_WR16(0x474, disp_width/8);
+                ROM_WR16(0x494, disp_height);
+                ROM_WR16(0x498, disp_width);
+                ROM_WR16(0xa0e, disp_height);           /* copybits? */
+                ROM_WR16(0xa10, disp_width);
+                ROM_WR16(0xee2, (disp_width/8)-4);      /* tPutIcon bytes per row, minus 4 */
+                ROM_WR16(0xef2, disp_width/8);          /* tPutIcon bytes per row */
+                ROM_WR16(0xf36, (disp_width/8)-2);      /* tPutIcon bytes per row, minus 2 */
+                ROM_WR8(0x1cd1, disp_width/8);          /* hidecursor */
+                ROM_WR16(0x1d48, disp_width-32);        /* 1d46+2 was originally 512-32 rite? */
+                ROM_WR16(0x1d4e, disp_width-32);        /* 1d4c+2 is 480, same */
+                ROM_WR16(0x1d6e, disp_height-16);       /* showcursor (YESS fixed Y crash bug!) */
+                ROM_WR16(0x1d74, disp_height);          /* showcursor */
+                ROM_WR8(0x1d93, disp_width/8);          /* showcursor */
+                ROM_WR16(0x1e68, disp_height);          /* mScrnSize */
+                ROM_WR16(0x1e6e, disp_width);           /* mScrnSize */
+                ROM_WR16(0x1e82, disp_height);          /* tScrnBitMap */
+        }
 
         /* FIXME: Welcome To Macintosh is drawn at the wrong position. Find where that's done. */
-#endif
+        return 0;
 }
 
-int      rom_patch(uint8_t *rom_base)
+static int      rom_patch1(uint8_t *rom_base, int disp_width, int disp_height, int mem_size)
 {
         uint32_t v = rom_get_version(rom_base);
         int r = -1;
@@ -242,8 +244,7 @@ int      rom_patch(uint8_t *rom_base)
          */
         switch(v) {
         case ROM_PLUSv3_VERSION:
-                rom_patch_plusv3(rom_base);
-                r = 0;
+                r = rom_patch_plusv3(rom_base, disp_width, disp_height, mem_size);
                 break;
 
         default:
@@ -253,3 +254,103 @@ int      rom_patch(uint8_t *rom_base)
         return r;
 }
 
+#if defined(UMAC_STANDALONE_PATCHER)
+#include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+int main(int argc, char **argv) {
+        uint8_t *rom_base;
+        char *rom_filename = "4D1F8172 - MacPlus v3.ROM";
+        char *rom_dump_filename = NULL; // Raw bytes
+        char *rom_header_filename = NULL; // C header
+        int ch;
+        int disp_width = 512;
+        int disp_height = 342;
+        int ram_size = 128;
+
+        while ((ch = getopt(argc, argv, "vm:r:w:W:")) != -1) {
+                switch (ch) {
+                case 'v':
+                        disp_width = 640;
+                        disp_height = 480;
+                        break;
+                case 'm':
+                        ram_size = atoi(optarg);
+                        break;
+                case 'r':
+                        rom_filename = strdup(optarg);
+                        break;
+                case 'W':
+                        rom_dump_filename = strdup(optarg);
+                        break;
+                case 'w':
+                        rom_header_filename = strdup(optarg);
+                        break;
+                case '?':
+                        abort();
+                }
+        }
+        if (!rom_dump_filename && !rom_header_filename) {
+                printf("Must specify either a -W (binary) or -w (C header) output file");
+                abort();
+        }
+        printf("Opening ROM '%s'\n", rom_filename);
+        int ofd = open(rom_filename, O_RDONLY);
+        if (ofd < 0) {
+                perror("ROM");
+                return 1;
+        }
+
+        struct stat sb;
+        fstat(ofd, &sb);
+        off_t _rom_size = sb.st_size;
+        rom_base = mmap(0, _rom_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, ofd, 0);
+        if (rom_base == MAP_FAILED) {
+                printf("Can't mmap ROM!\n");
+                return 1;
+        }
+        if (rom_patch1(rom_base, disp_width, disp_height, ram_size*1024)) {
+                printf("Failed to patch ROM\n");
+                return 1;
+        }
+        if (rom_dump_filename) {
+                int rfd = open(rom_dump_filename, O_CREAT | O_TRUNC | O_RDWR, 0655);
+                if (rfd < 0) {
+                        perror("ROM dump");
+                        return 1;
+                }
+                ssize_t written = write(rfd, rom_base, _rom_size);
+                if (written < 0) {
+                        perror("ROM dump write");
+                        return 1;
+                }
+                if (written < _rom_size) {
+                        printf("*** WARNING: Short write to %s!\n",
+                               rom_dump_filename);
+                } else {
+                        printf("Dumped ROM to %s\n", rom_dump_filename);
+                }
+                close(rfd);
+        }
+        if (rom_header_filename) {
+            FILE *ofd = fopen(rom_header_filename, "w");
+            if (!ofd) { perror("fopen"); abort(); }
+            for(off_t i=0; i<_rom_size; i++) {
+                fprintf(ofd, "%d,", rom_base[i]);
+                if(i % 16 == 15) fprintf(ofd, "\n");
+            }
+            fprintf(ofd, "\n");
+            printf("Dumped ROM to %s as header\n", rom_header_filename);
+            fclose(ofd);
+        }
+}
+#else
+int      rom_patch(uint8_t *rom_base) {
+        return rom_patch1(rom_base, DISP_WIDTH, DISP_HEIGHT, UMAC_MEMSIZE * 1024);
+}
+#endif
