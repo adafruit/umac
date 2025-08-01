@@ -34,6 +34,7 @@ int     umac_loop(void);
 void    umac_reset(void);
 void    umac_opt_disassemble(int enable);
 void    umac_mouse(int deltax, int deltay, int button);
+void    umac_absmouse(int x, int y, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 
 static inline void      umac_vsync_event(void)

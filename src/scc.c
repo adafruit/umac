@@ -126,6 +126,8 @@ static void     scc_wr3(int AnB, uint8_t data)
         }
 }
 
+int scc_get_mie() { return scc_mie; }
+
 // WR9: Master Interrupt control and reset commands
 static void     scc_wr9(uint8_t data)
 {

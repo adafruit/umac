@@ -618,13 +618,39 @@ void    umac_opt_disassemble(int enable)
  *
  * X is positive going right; Y is positive going upwards.
  */
-void    umac_mouse(int deltax, int deltay, int button)
+void    umac_absmouse(int x, int y, int button)
 {
+    if (!scc_get_mie()) return;
 #define MTemp_h 0x82a
 #define MTemp_v 0x828
 #define CrsrNew 0x8ce
 #define CrsrCouple 0x8cf
 
+        int oldx = RAM_RD16(MTemp_h);
+        int oldy = RAM_RD16(MTemp_v);
+
+        if(x != oldx) {
+            RAM_WR16(MTemp_h, x);
+        }
+
+        if (y != oldy) {
+            RAM_WR16(MTemp_v, y);
+        }
+
+        if(x != oldx || y != oldy) {
+            RAM_WR8(CrsrNew, RAM_RD8(CrsrCouple));
+        }
+
+        via_mouse_pressed = button;
+}
+
+/* Provide mouse input (movement, button) data.
+ *
+ * X is positive going right; Y is positive going upwards.
+ */
+void    umac_mouse(int deltax, int deltay, int button)
+{
+    if (!scc_get_mie()) return;
         if(deltax) {
             int16_t temp_h = RAM_RD16(MTemp_h) + deltax;
             RAM_WR16(MTemp_h, temp_h);

@@ -287,8 +287,14 @@ int     main(int argc, char *argv[])
                 perror("SDL window");
                 return 1;
         }
-        SDL_SetWindowGrab(window, SDL_TRUE);
-        SDL_SetRelativeMouseMode(SDL_TRUE);
+
+        static const int absmouse = 1;
+        if (!absmouse) {
+            SDL_SetWindowGrab(window, SDL_TRUE);
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+        } else {
+            SDL_ShowCursor(SDL_DISABLE);
+        }
 
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
@@ -355,7 +361,8 @@ int     main(int argc, char *argv[])
                 SDL_Event event;
                 int mousex = 0;
                 int mousey = 0;
-
+                int send_mouse = 0;
+                static int absmousex, absmousey;
                 if (SDL_PollEvent(&event)) {
                         switch (event.type) {
                         case SDL_QUIT:
@@ -372,21 +379,32 @@ int     main(int argc, char *argv[])
                         } break;
 
                         case SDL_MOUSEMOTION:
+                                send_mouse = 1;
+                                absmousex = event.motion.x / DISP_SCALE;
+                                absmousey = event.motion.y / DISP_SCALE;
                                 mousex = event.motion.xrel;
                                 mousey = -event.motion.yrel;
                                 break;
 
                         case SDL_MOUSEBUTTONDOWN:
+                                send_mouse = 1;
                                 mouse_button = 1;
                                 break;
 
                         case SDL_MOUSEBUTTONUP:
+                                send_mouse = 1;
                                 mouse_button = 0;
                                 break;
                         }
                 }
 
-                umac_mouse(mousex, mousey, mouse_button);
+                if (send_mouse) {
+                    if(absmouse) {
+                        umac_absmouse(absmousex, absmousey, mouse_button);
+                    } else {
+                        umac_mouse(mousex, mousey, mouse_button);
+                    }
+                }
 
                 done |= umac_loop();
 
