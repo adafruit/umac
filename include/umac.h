@@ -34,6 +34,7 @@ int     umac_loop(void);
 void    umac_reset(void);
 void    umac_opt_disassemble(int enable);
 void    umac_mouse(int deltax, int deltay, int button);
+void    umac_absmouse(int x, int y, int button);
 void    umac_kbd_event(uint8_t scancode, int down);
 
 static inline void      umac_vsync_event(void)
@@ -52,5 +53,16 @@ static inline unsigned int      umac_get_fb_offset(void)
         /* FIXME: Implement VIA RA6/vid.pg2 */
         return RAM_SIZE - ((DISP_WIDTH * DISP_HEIGHT / 8) + 0x380);
 }
+
+#if ENABLE_AUDIO
+#define umac_get_audio_offset() (RAM_SIZE - 768)
+#define umac_get_audio_offset_end() (RAM_SIZE - 768 + 2 * 370)
+extern unsigned first_audio_sample;
+#define umac_get_first_audio_sample() (first_audio_sample)
+#define umac_reset_first_audio_sample() (first_audio_sample = 0, (void)0)
+
+void umac_audio_trap();
+void umac_audio_cfg(int volume, int sndres);
+#endif
 
 #endif

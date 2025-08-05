@@ -27,6 +27,7 @@
 
 DEBUG ?= 0
 MEMSIZE ?= 128
+ENABLE_AUDIO ?= 1
 
 SOURCES = $(wildcard src/*.c)
 
@@ -54,9 +55,12 @@ endif
 # Basic support for changing screen res (with the MacPlusV3 ROM)
 DISP_WIDTH ?= 512
 DISP_HEIGHT ?= 342
-CFLAGS_CFG = -DDISP_WIDTH=$(DISP_WIDTH) -DDISP_HEIGHT=$(DISP_HEIGHT)
+CFLAGS_CFG = -DDISP_WIDTH=$(DISP_WIDTH) -DDISP_HEIGHT=$(DISP_HEIGHT) -DENABLE_AUDIO=$(ENABLE_AUDIO)
 
-all:	main
+all:	main patcher
+
+patcher: src/rom.c
+	$(CC) $(CFLAGS) -DUMAC_STANDALONE_PATCHER -o $@ $<
 
 $(MUSASHI_SRC): $(MUSASHI)/m68kops.h
 
@@ -74,7 +78,7 @@ main:	$(OBJS)
 
 clean:
 	make -C $(MUSASHI) clean
-	rm -f $(MY_OBJS) main
+	rm -f $(MY_OBJS) main patcher
 
 ################################################################################
 # Mac driver sources (no need to generally rebuild

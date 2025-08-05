@@ -35,6 +35,8 @@ void    scc_write(unsigned int address, uint8_t data);
 uint8_t scc_read(unsigned int address);
 /* Set a new state for the DCD pins: */
 void    scc_set_dcd(int a, int b);
+/* check if scc master interrupt is enabled */
+int scc_get_mie();
 
 #endif
 

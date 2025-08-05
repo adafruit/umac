@@ -27,6 +27,7 @@
  * SOFTWARE.
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -35,6 +36,9 @@
 #include <sys/time.h>
 #include <string.h>
 #include <unistd.h>
+#if ENABLE_AUDIO
+#include <stdatomic.h>
+#endif
 #include "SDL.h"
 
 #include "rom.h"
@@ -77,6 +81,42 @@ static void     copy_fb(uint32_t *fb_out, uint8_t *fb_in)
                 }
         }
 }
+
+#if ENABLE_AUDIO
+// audio_callback is called from a thread, so pending_v_retrace can't be a regular variable
+atomic_int pending_v_retrace;
+static int volscale;
+uint8_t *audio_base;
+
+int16_t audio[370];
+
+void umac_audio_cfg(int umac_volume, int umac_sndres) {
+        volscale = umac_sndres ? 0 : 65536 * umac_volume / 7;
+}
+
+void umac_audio_trap() {
+    int32_t  offset = 128;
+    uint16_t *audiodata = (uint16_t*)audio_base;
+    int scale = volscale;
+    if (!scale) {
+        memset(audio, 0, sizeof(audio));
+        return;
+    }
+    int16_t *stream = audio;
+    for(int i=0; i<370; i++) {
+        int32_t a = (*audiodata++ & 0xff) - offset;
+        a = (a * scale) >> 8;
+        *stream++ = a;
+    }
+}
+
+static void audio_callback(void *userdata, Uint8 *stream_in, int len_bytes) {
+        (void) userdata;
+        assert(len_bytes == sizeof(audio));
+        atomic_store(&pending_v_retrace, 1);
+        memcpy(stream_in, audio, sizeof(audio));
+}
+#endif
 
 /**********************************************************************/
 
@@ -232,7 +272,11 @@ int     main(int argc, char *argv[])
         SDL_Renderer *renderer;
         SDL_Texture *texture;
 
-        SDL_Init(SDL_INIT_VIDEO);
+        SDL_Init(SDL_INIT_VIDEO
+#if ENABLE_AUDIO
+                | SDL_INIT_AUDIO
+#endif
+);
         SDL_Window *window = SDL_CreateWindow("umac",
                                               SDL_WINDOWPOS_UNDEFINED,
                                               SDL_WINDOWPOS_UNDEFINED,
@@ -243,8 +287,14 @@ int     main(int argc, char *argv[])
                 perror("SDL window");
                 return 1;
         }
-        SDL_SetWindowGrab(window, SDL_TRUE);
-        SDL_SetRelativeMouseMode(SDL_TRUE);
+
+        static const int absmouse = 1;
+        if (!absmouse) {
+            SDL_SetWindowGrab(window, SDL_TRUE);
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+        } else {
+            SDL_ShowCursor(SDL_DISABLE);
+        }
 
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
@@ -264,25 +314,55 @@ int     main(int argc, char *argv[])
                 return 1;
         }
 
+#if ENABLE_AUDIO
+        SDL_AudioSpec desired, obtained;
+
+        audio_base = (uint8_t*)ram_base + umac_get_audio_offset();
+
+        SDL_zero(desired);
+        desired.freq = 22256; // wat
+        desired.channels = 1;
+        desired.samples = 370;
+        desired.userdata = (uint8_t*)ram_base + umac_get_audio_offset();
+        desired.callback = audio_callback;
+        desired.format = AUDIO_S16;
+
+        SDL_AudioDeviceID audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained, 0);
+        if (!audio_device) {
+                char buf[500];
+                SDL_GetErrorMsg(buf, sizeof(buf));
+                printf("SDL audio_deviceSDL_GetError() -> %s\n", buf);
+                return 1;
+        }
+#endif
+
         ////////////////////////////////////////////////////////////////////////
         // Emulator init
 
         umac_init(ram_base, rom_base, discs);
         umac_opt_disassemble(opt_disassemble);
 
+#if ENABLE_AUDIO
+        // Default state is paused, this unpauses it
+        SDL_PauseAudioDevice(audio_device, 0);
+#endif
+
         ////////////////////////////////////////////////////////////////////////
         // Main loop
 
         int done = 0;
         int mouse_button = 0;
+#if !ENABLE_AUDIO
         uint64_t last_vsync = 0;
+#endif
         uint64_t last_1hz = 0;
         do {
                 struct timeval tv_now;
                 SDL_Event event;
                 int mousex = 0;
                 int mousey = 0;
-
+                int send_mouse = 0;
+                static int absmousex, absmousey;
                 if (SDL_PollEvent(&event)) {
                         switch (event.type) {
                         case SDL_QUIT:
@@ -299,21 +379,32 @@ int     main(int argc, char *argv[])
                         } break;
 
                         case SDL_MOUSEMOTION:
+                                send_mouse = 1;
+                                absmousex = event.motion.x / DISP_SCALE;
+                                absmousey = event.motion.y / DISP_SCALE;
                                 mousex = event.motion.xrel;
                                 mousey = -event.motion.yrel;
                                 break;
 
                         case SDL_MOUSEBUTTONDOWN:
+                                send_mouse = 1;
                                 mouse_button = 1;
                                 break;
 
                         case SDL_MOUSEBUTTONUP:
+                                send_mouse = 1;
                                 mouse_button = 0;
                                 break;
                         }
                 }
 
-                umac_mouse(mousex, mousey, mouse_button);
+                if (send_mouse) {
+                    if(absmouse) {
+                        umac_absmouse(absmousex, absmousey, mouse_button);
+                    } else {
+                        umac_mouse(mousex, mousey, mouse_button);
+                    }
+                }
 
                 done |= umac_loop();
 
@@ -321,12 +412,27 @@ int     main(int argc, char *argv[])
                 uint64_t now_usec = (tv_now.tv_sec * 1000000) + tv_now.tv_usec;
 
                 /* Passage of time: */
-                if ((now_usec - last_vsync) >= 16667) {
+#if ENABLE_AUDIO
+                int do_v_retrace = atomic_exchange(&pending_v_retrace, 0);
+#else
+                int do_v_retrace = (now_usec - last_vsync) >= 16667;
+#endif
+                if (do_v_retrace) {
                         umac_vsync_event();
-                        last_vsync = now_usec;
 
-                        /* Cheapo framerate limiting: */
                         copy_fb(framebuffer, ram_get_base() + umac_get_fb_offset());
+
+        uint16_t *audioptr = (uint16_t*)((uint8_t*)ram_base + umac_get_audio_offset());
+        for(int i=0; i<DISP_HEIGHT; i++) {
+            int d = *audioptr++ & 0xff;
+            for(int j=0; j<8; j++) {
+                if (d & (1 << j)) {
+                    uint32_t fbdata = framebuffer[j + i * DISP_WIDTH];
+                    fbdata = (fbdata & ~0xff) | ((d & (1 << j)) ? 0xff : 0);
+                    framebuffer[j + i * DISP_WIDTH] = fbdata;
+                }
+            }
+        }
                         SDL_UpdateTexture(texture, NULL, framebuffer,
                                           DISP_WIDTH * sizeof (Uint32));
                         /* Scales texture up to window size */

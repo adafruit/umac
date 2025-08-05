@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <setjmp.h>
 
+#include "umac.h"
 #include "machw.h"
 #include "m68k.h"
 #include "via.h"
@@ -70,8 +71,11 @@ static unsigned int g_int_controller_highest_int = 0;  /* Highest pending interr
 uint8_t *_ram_base;
 uint8_t *_rom_base;
 
+#if ENABLE_AUDIO
+static int umac_volume, umac_sndres;
+#endif
 int overlay = 1;
-static uint64_t global_time_us = 0;
+static uint64_t global_time_us = 0, global_cycles = 0;
 static int sim_done = 0;
 static jmp_buf main_loop_jb;
 
@@ -154,8 +158,14 @@ static void     via_ra_changed(uint8_t val)
                 MDBG("OVERLAY CHANGING\n");
                 update_overlay_layout();
         }
-
+#if ENABLE_AUDIO
+        uint8_t vol = val & 7;
+        if (vol != umac_volume) {
+            umac_volume = val & 7;
+            umac_audio_cfg(umac_volume, umac_sndres);
+        }
         oldval = val;
+#endif
 }
 
 static void     via_rb_changed(uint8_t val)
@@ -166,7 +176,13 @@ static void     via_rb_changed(uint8_t val)
         // 4 = mouse4 (in, mouse X2)
         // 3 = mouse7 (in, 0 = button pressed)
         // [2:0] = RTC controls
-        (void)val;
+#if ENABLE_AUDIO
+        uint8_t sndres = val >> 7;
+        if(sndres != umac_sndres) {
+            umac_sndres = sndres;
+            umac_audio_cfg(umac_volume, umac_sndres);
+        }
+#endif
 }
 
 static uint8_t  via_ra_in(void)
@@ -437,7 +453,13 @@ unsigned int    cpu_read_long_dasm(unsigned int address)
 void    FAST_FUNC(cpu_write_byte)(unsigned int address, unsigned int value)
 {
         if (IS_RAM(address)) {
-                RAM_WR8(CLAMP_RAM_ADDR(address), value);
+                address = CLAMP_RAM_ADDR(address);
+                RAM_WR8(address, value);
+#if ENABLE_AUDIO
+                if(IS_RAM_AUDIO_TRAP(address)) {
+                    umac_audio_trap();
+                }
+#endif
                 return;
         }
 
@@ -592,10 +614,35 @@ void    umac_opt_disassemble(int enable)
         disassemble = enable;
 }
 
-#define MOUSE_MAX_PENDING_PIX   30
+/* Provide mouse input (movement, button) data.
+ *
+ * X is positive going right; Y is positive going upwards.
+ */
+void    umac_absmouse(int x, int y, int button)
+{
+    if (!scc_get_mie()) return;
+#define MTemp_h 0x82a
+#define MTemp_v 0x828
+#define CrsrNew 0x8ce
+#define CrsrCouple 0x8cf
 
-static int pending_mouse_deltax = 0;
-static int pending_mouse_deltay = 0;
+        int oldx = RAM_RD16(MTemp_h);
+        int oldy = RAM_RD16(MTemp_v);
+
+        if(x != oldx) {
+            RAM_WR16(MTemp_h, x);
+        }
+
+        if (y != oldy) {
+            RAM_WR16(MTemp_v, y);
+        }
+
+        if(x != oldx || y != oldy) {
+            RAM_WR8(CrsrNew, RAM_RD8(CrsrCouple));
+        }
+
+        via_mouse_pressed = button;
+}
 
 /* Provide mouse input (movement, button) data.
  *
@@ -603,83 +650,22 @@ static int pending_mouse_deltay = 0;
  */
 void    umac_mouse(int deltax, int deltay, int button)
 {
-        pending_mouse_deltax += deltax;
-        pending_mouse_deltay += deltay;
-
-        /* Clamp if the UI has flooded with lots and lots of steps!
-         */
-        if (pending_mouse_deltax > MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltax = MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltax < -MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltax = -MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltay > MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltay = MOUSE_MAX_PENDING_PIX;
-        if (pending_mouse_deltay < -MOUSE_MAX_PENDING_PIX)
-                pending_mouse_deltay = -MOUSE_MAX_PENDING_PIX;
-
-        /* FIXME: The movement might take a little time, but this
-         * posts the button status immediately.  Probably OK, but the
-         * mismatch might be perceptible.
-         */
-        via_mouse_pressed = button;
-}
-
-static void     mouse_tick(void)
-{
-        /* Periodically, check if the mouse X/Y deltas are non-zero.
-         * If a movement is required, encode one step in X and/or Y
-         * and deduct from the pending delta.
-         *
-         * The step ultimately posts an SCC IRQ, so we _don't_ try to
-         * make any more steps while an IRQ is currently pending.
-         * (Currently, that means a previous step's DCD IRQ event
-         * hasn't yet been consumed by the OS handler.  In future, if
-         * SCC is extended with other IRQ types, then just checking
-         * the IRQ status is technically too crude, but should still
-         * be fine given the timeframes.)
-         */
-        if (pending_mouse_deltax == 0 && pending_mouse_deltay == 0)
-                return;
-
-        if (scc_irq_state == 1)
-                return;
-
-        static int old_dcd_a = 0;
-        static int old_dcd_b = 0;
-
-        /* Mouse X/Y quadrature signals are wired to:
-         *  VIA Port B[4] & SCC DCD_A for X
-         *  VIA Port B[5] & SCC DCD_B for Y
-         *
-         * As VIA mouse signals aren't sampled until IRQ, can do this
-         * in one step, toggling existing DCD states and setting VIA
-         * either equal or opposite to DCD:
-         */
-        int dcd_a = old_dcd_a;
-        int dcd_b = old_dcd_b;
-        int deltax = pending_mouse_deltax;
-        int deltay = pending_mouse_deltay;
-        uint8_t qb = via_quadbits;
-
-        if (deltax) {
-                dcd_a = !dcd_a;
-                qb = (qb & ~0x10) | ((deltax < 0) == dcd_a ? 0x10 : 0);
-                pending_mouse_deltax += (deltax > 0) ? -1 : 1;
-                MDBG("  px %d, oldpx %d", pending_mouse_deltax, deltax);
+    if (!scc_get_mie()) return;
+        if(deltax) {
+            int16_t temp_h = RAM_RD16(MTemp_h) + deltax;
+            RAM_WR16(MTemp_h, temp_h);
         }
 
         if (deltay) {
-                dcd_b = !dcd_b;
-                qb = (qb & ~0x20) | ((deltay < 0) == dcd_b ? 0x20 : 0);
-                pending_mouse_deltay += (deltay > 0) ? -1 : 1;
-                MDBG("  py %d, oldpy %d", pending_mouse_deltay, deltay);
+            int16_t temp_v = RAM_RD16(MTemp_v) - deltay;
+            RAM_WR16(MTemp_v, temp_v);
         }
-        MDBG("\n");
 
-        via_quadbits = qb;
-        old_dcd_a = dcd_a;
-        old_dcd_b = dcd_b;
-        scc_set_dcd(dcd_a, dcd_b);
+        if(deltax || deltay) {
+            RAM_WR8(CrsrNew, RAM_RD8(CrsrCouple));
+        }
+
+        via_mouse_pressed = button;
 }
 
 void    umac_reset(void)
@@ -705,13 +691,15 @@ int     umac_loop(void)
 {
         setjmp(main_loop_jb);
 
-        const int us = UMAC_EXECLOOP_QUANTUM;
-        m68k_execute(us*8);
-        global_time_us += us;
+        int cycles = UMAC_EXECLOOP_QUANTUM * 8;
+        cycles = via_limit_cycles(cycles);
+        int used_cycles = m68k_execute(cycles);
+        MDBG("Asked to execute %d cycles, actual %d cycles\n", cycles, used_cycles);
+        global_cycles += used_cycles;
+        global_time_us = global_cycles / 8;
 
         // Device polling
-        via_tick(global_time_us);
-        mouse_tick();
+        via_tick(used_cycles);
         kbd_check_work();
 
 	return sim_done;

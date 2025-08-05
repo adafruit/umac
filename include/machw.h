@@ -81,6 +81,8 @@ extern int overlay;
  * But, that should never happen post-boot.
  */
 #define CLAMP_RAM_ADDR(x) ((x) >= RAM_SIZE ? (x) % RAM_SIZE : (x))
+/* Is the address (previously clamped with CLAMP_RAM_ADDR) the audio trap address? (last byte of audio data) */
+#define IS_RAM_AUDIO_TRAP(x) (x == umac_get_audio_offset() + 2 * 369)
 
 #define IS_VIA(x)       ((ADR24(x) & 0xe80000) == 0xe80000)
 #define IS_IWM(x)       ((ADR24(x) >= 0xdfe1ff) && (ADR24(x) < (0xdfe1ff + 0x2000)))

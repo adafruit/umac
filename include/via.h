@@ -40,7 +40,8 @@ struct via_cb {
 void    via_init(struct via_cb *cb);
 void    via_write(unsigned int address, uint8_t data);
 uint8_t via_read(unsigned int address);
-void    via_tick(uint64_t time);
+void    via_tick(int cycles);
+int     via_limit_cycles(int cycles);
 /* Trigger an event on CA1 or CA2: */
 void    via_caX_event(int ca);
 void    via_sr_rx(uint8_t val);
