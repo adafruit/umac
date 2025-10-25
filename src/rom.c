@@ -273,11 +273,17 @@ int main(int argc, char **argv) {
         int disp_height = 342;
         int ram_size = 128;
 
-        while ((ch = getopt(argc, argv, "vm:r:w:W:")) != -1) {
+        while ((ch = getopt(argc, argv, "vh:w:m:r:o:W:")) != -1) {
                 switch (ch) {
                 case 'v':
                         disp_width = 640;
                         disp_height = 480;
+                        break;
+                case 'w':
+                        disp_width = atoi(optarg);
+                        break;
+                case 'h':
+                        disp_height = atoi(optarg);
                         break;
                 case 'm':
                         ram_size = atoi(optarg);
@@ -288,7 +294,7 @@ int main(int argc, char **argv) {
                 case 'W':
                         rom_dump_filename = strdup(optarg);
                         break;
-                case 'w':
+                case 'o':
                         rom_header_filename = strdup(optarg);
                         break;
                 case '?':
@@ -296,7 +302,7 @@ int main(int argc, char **argv) {
                 }
         }
         if (!rom_dump_filename && !rom_header_filename) {
-                printf("Must specify either a -W (binary) or -w (C header) output file");
+                printf("Must specify either a -W (binary) or -o (C header) output file");
                 abort();
         }
         printf("Opening ROM '%s'\n", rom_filename);
@@ -318,6 +324,7 @@ int main(int argc, char **argv) {
                 printf("Failed to patch ROM\n");
                 return 1;
         }
+        printf("Patched ROM for screen size %dx%d\n", disp_width, disp_height);
         if (rom_dump_filename) {
                 int rfd = open(rom_dump_filename, O_CREAT | O_TRUNC | O_RDWR, 0655);
                 if (rfd < 0) {
