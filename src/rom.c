@@ -229,19 +229,20 @@ printf("screen size=%d screen_base=%x\n", screen_size, screen_base);
                  * 1e6e : x
                  * 1e82 : y
                  */
+                int halfheight = disp_height/2 | 1; // was odd with 342 lines
                 ROM_WR32(0x8a, screen_base);
                 ROM_WR32(0x146, screen_base);
-                ROM_WR32(0x164, SBCOORD(disp_width/2 - (48/2), disp_height/2 + 8));
+                ROM_WR32(0x164, SBCOORD(disp_width/2 - (48/2), halfheight + 8));
                 ROM_WR16(0x188, disp_width/8);
                 ROM_WR16(0x194, disp_width/8);
                 ROM_WR16(0x19c, (6*disp_width/8)-1);
-                ROM_WR32(0x1a4, SBCOORD(disp_width/2 - 8, disp_height/2 + 8 + 8));
+                ROM_WR32(0x1a4, SBCOORD(disp_width/2 - 8, halfheight + 8 + 8));
                 ROM_WR16(0x1ee, (screen_size/4)-1);
 
-                ROM_WR32(0xf0c, SBCOORD(disp_width/2 - 16, disp_height/2 - 26));
-                ROM_WR32(0xf18, SBCOORD(disp_width/2 - 8, disp_height/2 - 20));
-                ROM_WR32(0x7e0, SBCOORD(disp_width/2 - 16, disp_height/2 - 26));
-                ROM_WR32(0x7f2, SBCOORD(disp_width/2 - 8, disp_height/2 - 11));
+                ROM_WR32(0xf0c, SBCOORD(disp_width/2 - 16, halfheight - 26));
+                ROM_WR32(0xf18, SBCOORD(disp_width/2 - 8, halfheight - 20));
+                ROM_WR32(0x7e0, SBCOORD(disp_width/2 - 16, halfheight - 26));
+                ROM_WR32(0x7f2, SBCOORD(disp_width/2 - 8, halfheight - 11));
 
                 /* Patch "SubA #$5900, A5" to subtract 0x9880.
                  * However... can't just patch the int16 immediate, as that's
